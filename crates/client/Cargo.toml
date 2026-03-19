@@ -1,0 +1,32 @@
+[package]
+name = "rs2-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rs2-common = { path = "../common" }
+glam = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+byteorder = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+flate2 = { workspace = true }
+bzip2 = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
+pollster = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = [
+    "WebSocket", "MessageEvent", "BinaryType",
+    "HtmlCanvasElement", "WebGl2RenderingContext",
+    "KeyboardEvent", "MouseEvent", "PointerEvent",
+    "Document", "Window", "Navigator",
+] }
+js-sys = { workspace = true }

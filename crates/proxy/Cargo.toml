@@ -1,0 +1,12 @@
+[package]
+name = "rs2-proxy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = "0.24"
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+futures-util = { workspace = true }

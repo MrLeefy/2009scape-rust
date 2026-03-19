@@ -1,0 +1,10 @@
+[package]
+name = "rs2-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+byteorder = { workspace = true }
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+log = { workspace = true }
