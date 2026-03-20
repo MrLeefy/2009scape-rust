@@ -4,6 +4,7 @@
 
 const GOLDEN_RATIO: u32 = 0x9e3779b9;
 
+#[derive(Debug)]
 pub struct IsaacRandom {
     count: usize,
     rsl: [u32; 256],
