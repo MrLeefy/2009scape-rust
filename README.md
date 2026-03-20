@@ -51,10 +51,10 @@ cargo run -p rs2-cache-tool -- /path/to/cache
 |-------|--------|-------------|
 | 1. Foundation | ✅ Done | Buffer, ISAAC, cache, networking, wgpu setup |
 | 2. Login Screen | ✅ Done | 2D rendering pipeline, login UI, keyboard input |
-| 3. World Rendering | 🔲 Next | Tiles, terrain, objects, models |
-| 4. Entities | 🔲 | NPCs, players, animations |
-| 5. UI System | 🔲 | Inventory, chat, minimap |
-| 6. Audio + PWA | 🔲 | Sound effects, music, service worker |
+| 3. World Rendering | ✅ Done | 3D terrain, camera, lighting, fog, depth buffer |
+| 4. Entities | ✅ Done | NPCs, players, movement, 3D rendering |
+| 5. UI System | ✅ Done | Inventory, skills, chat, minimap, tabs |
+| 6. Audio + PWA | 🔲 Next | Sound effects, music, service worker |
 
 ## License
 
