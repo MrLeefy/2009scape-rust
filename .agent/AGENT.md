@@ -76,10 +76,27 @@ cargo build -p rs2-client
 cargo run -p rs2-client
 ```
 
-## What Could Come Next
-- Wire bitmap font into existing HUD (replace colored blocks with actual text)
-- Wire mouse input into game loop (click-to-walk, inventory interaction)
-- Load actual cache terrain/models/sprites from disk
-- Live server connection test to test.2009scape.org
-- WASM build via wasm-pack + deploy PWA
-- Sound playback (rodio for native, web-audio for WASM)
+## Java Source Reference
+The RT4 Java client is at `c:\Users\baseb\Desktop\2009scape mobile\rt4-mobile-client\client\src\main\java\rt4\` (229 files, ~50K lines). Key files used for porting:
+- `LoginManager.java` → `net/login.rs` (DONE)
+- `IsaacRandom.java` → `common/isaac.rs` (DONE)
+- `Buffer.java` → `common/buffer.rs` (DONE)
+- `ClientProt.java` → `net/protocol.rs` (opcodes match)
+- `Cache.java` / `Js5.java` → cache loading (TODO)
+- `SceneGraph.java` → world rendering (TODO)
+- `Model.java` → 3D models (TODO)
+
+## Active Completion Plan
+- [x] Phase A: Real server login protocol (from LoginManager.java)
+- [ ] Phase B: Cache asset loading (JS5 + item/NPC/object defs + models)
+- [ ] Phase C: Server protocol (player/NPC updates, map regions)
+- [ ] Phase D: SD/HD rendering toggle
+
+## Integration Status
+- ✅ CombatSystem wired into Game.tick() with auto-attack demo + hit splats + XP drops
+- ✅ AudioEngine wired with region music + SFX triggers
+- ✅ PacketHandler processes server stat/chat/inv/sound updates
+- ✅ Mouse events wired (CursorMoved/MouseInput/MouseWheel)
+- ✅ Bitmap font renders all HUD text
+- ✅ Real login handshake in net/login.rs (not yet triggered from UI)
+

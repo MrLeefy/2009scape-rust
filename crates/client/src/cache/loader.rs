@@ -1,312 +1,340 @@
-//! Cache integration — loads actual RS cache data.
+//! Cache definition loaders — ObjType, NpcType, LocType.
 //!
-//! Reads idx/dat2 files and decodes terrain, models, items, NPCs.
+//! Translated from rt4/ObjType.java, NpcType.java, LocType.java.
+//! Reads item/NPC/location definitions from the cache.
 
+use rs2_common::buffer::Buffer;
+use super::{Js5Cache, archives};
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
-use std::fs::File;
-use std::path::Path;
+use anyhow::{Result, bail};
+use log::{info, debug, warn};
 
-const SECTOR_SIZE: usize = 520;
-const INDEX_ENTRY_SIZE: usize = 6;
-const SECTOR_HEADER_SIZE: usize = 8;
+// ──────────────────────────── ObjType ────────────────────────────
 
-/// Cache archive indices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CacheIndex {
-    Skeletons = 0,
-    Skins = 1,
-    Configs = 2,
-    Interfaces = 3,
-    SynthSounds = 4,
-    Maps = 5,
-    Music = 6,
-    Models = 7,
-    Sprites = 8,
-    Textures = 9,
-    Binary = 10,
-    JagScripts = 11,
-    ClientScripts = 12,
-    FontMetrics = 13,
-    Vorbis = 14,
-}
-
-/// Decoded item definition.
+/// An item definition from the cache.
 #[derive(Debug, Clone)]
-pub struct ItemDef {
+pub struct ObjType {
     pub id: u32,
     pub name: String,
-    pub examine: String,
-    pub value: u32,
-    pub members: bool,
+    pub model: u16,
+    pub zoom2d: u16,
+    pub x_angle_2d: u16,
+    pub y_angle_2d: u16,
+    pub z_angle_2d: u16,
+    pub x_offset_2d: i16,
+    pub y_offset_2d: i16,
     pub stackable: bool,
-    pub noted: bool,
-    pub equipable: bool,
-    pub model_id: u32,
-    pub inv_model: u32,
-    pub zoom: u16,
-    pub rotation_x: u16,
-    pub rotation_y: u16,
+    pub cost: i32,
+    pub members: bool,
+    pub team: u8,
+    pub ops: [Option<String>; 5],       // ground options (right-click)
+    pub iops: [Option<String>; 5],      // inventory options
+    pub stock_market: bool,
+    pub cert_link: i16,
+    pub cert_template: i16,
+    pub lent_link: i16,
+    pub lent_template: i16,
+    pub man_wear: i16,
+    pub woman_wear: i16,
 }
 
-/// Decoded NPC definition.
+impl ObjType {
+    fn new(id: u32) -> Self {
+        ObjType {
+            id,
+            name: "null".into(),
+            model: 0,
+            zoom2d: 2000,
+            x_angle_2d: 0,
+            y_angle_2d: 0,
+            z_angle_2d: 0,
+            x_offset_2d: 0,
+            y_offset_2d: 0,
+            stackable: false,
+            cost: 1,
+            members: false,
+            team: 0,
+            ops: [None, None, Some("Take".into()), None, None],
+            iops: [None, None, None, None, Some("Drop".into())],
+            stock_market: false,
+            cert_link: -1,
+            cert_template: -1,
+            lent_link: -1,
+            lent_template: -1,
+            man_wear: -1,
+            woman_wear: -1,
+        }
+    }
+
+    /// Decode an ObjType from buffer data.
+    /// Translated from ObjType.decode() in Java.
+    fn decode(id: u32, data: &[u8]) -> Result<Self> {
+        let mut obj = ObjType::new(id);
+        let mut buf = Buffer::wrap(data.to_vec());
+
+        loop {
+            let opcode = buf.g1()?;
+            if opcode == 0 { break; }
+
+            match opcode {
+                1 => { obj.model = buf.g2()?; }
+                2 => { obj.name = buf.gjstr()?; }
+                4 => { obj.zoom2d = buf.g2()?; }
+                5 => { obj.x_angle_2d = buf.g2()?; }
+                6 => { obj.y_angle_2d = buf.g2()?; }
+                7 => {
+                    let v = buf.g2()? as i16;
+                    obj.x_offset_2d = if v > 32767 { v - 65536i16 } else { v };
+                }
+                8 => {
+                    let v = buf.g2()? as i16;
+                    obj.y_offset_2d = if v > 32767 { v - 65536i16 } else { v };
+                }
+                11 => { obj.stackable = true; }
+                12 => { obj.cost = buf.g4()?; }
+                16 => { obj.members = true; }
+                23 => { obj.man_wear = buf.g2()? as i16; }
+                24 => { let _ = buf.g2()?; } // manwear2
+                25 => { obj.woman_wear = buf.g2()? as i16; }
+                26 => { let _ = buf.g2()?; } // womanwear2
+                30..=34 => {
+                    let s = buf.gjstr()?;
+                    obj.ops[(opcode - 30) as usize] = if s == "Hidden" { None } else { Some(s) };
+                }
+                35..=39 => {
+                    obj.iops[(opcode - 35) as usize] = Some(buf.gjstr()?);
+                }
+                40 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; let _ = buf.g2()?; }
+                }
+                41 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; let _ = buf.g2()?; }
+                }
+                42 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g1()?; }
+                }
+                65 => { obj.stock_market = true; }
+                78 | 79 => { let _ = buf.g2()?; } // manwear3/womanwear3
+                90 | 91 | 92 | 93 => { let _ = buf.g2()?; } // head models
+                95 => { obj.z_angle_2d = buf.g2()?; }
+                96 => { let _ = buf.g1()?; } // dummyItem
+                97 => { obj.cert_link = buf.g2()? as i16; }
+                98 => { obj.cert_template = buf.g2()? as i16; }
+                100..=109 => { let _ = buf.g2()?; let _ = buf.g2()?; } // countobj/countco
+                110 | 111 | 112 => { let _ = buf.g2()?; } // resize
+                113 | 114 => { let _ = buf.g1()?; } // ambient/contrast (g1b)
+                115 => { obj.team = buf.g1()?; }
+                121 => { obj.lent_link = buf.g2()? as i16; }
+                122 => { obj.lent_template = buf.g2()? as i16; }
+                125 | 126 => { let _ = buf.g1()?; let _ = buf.g1()?; let _ = buf.g1()?; }
+                127 | 128 => { let _ = buf.g1()?; let _ = buf.g2()?; }
+                129 | 130 => { let _ = buf.g1()?; let _ = buf.g2()?; }
+                249 => {
+                    let size = buf.g1()?;
+                    for _ in 0..size {
+                        let is_string = buf.g1()? == 1;
+                        let _ = buf.g3()?;
+                        if is_string { let _ = buf.gjstr()?; } else { let _ = buf.g4()?; }
+                    }
+                }
+                _ => { warn!("Unknown ObjType opcode: {}", opcode); break; }
+            }
+        }
+        Ok(obj)
+    }
+}
+
+// ──────────────────────────── NpcType ────────────────────────────
+
+/// An NPC definition from the cache.
 #[derive(Debug, Clone)]
-pub struct NpcDef {
+pub struct NpcType {
     pub id: u32,
     pub name: String,
-    pub examine: String,
-    pub combat_level: u16,
     pub size: u8,
-    pub model_ids: Vec<u32>,
-    pub stand_anim: i32,
-    pub walk_anim: i32,
-    pub options: [String; 5],
-    pub minimap_visible: bool,
-    pub head_icon: i32,
+    pub combat_level: i16,
+    pub ops: [Option<String>; 5],
+    pub visible_on_minimap: bool,
+    pub click_area: u16,
+    pub head_icon: i16,
 }
 
-/// Decoded object/loc definition.
-#[derive(Debug, Clone)]
-pub struct ObjDef {
-    pub id: u32,
-    pub name: String,
-    pub width: u8,
-    pub height: u8,
-    pub model_ids: Vec<u32>,
-    pub solid: bool,
-    pub interact_type: u8,
-    pub map_icon: i32,
-    pub options: [String; 5],
-    pub anim_id: i32,
-}
-
-/// Terrain tile data from m{x}_{z} map files.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TerrainTile {
-    pub height: i32,
-    pub overlay_id: u8,
-    pub overlay_shape: u8,
-    pub overlay_rotation: u8,
-    pub settings: u8,
-    pub underlay_id: u8,
-}
-
-/// A 64×64 map region.
-#[derive(Debug, Clone)]
-pub struct MapRegion {
-    pub region_x: u16,
-    pub region_y: u16,
-    pub tiles: Vec<Vec<Vec<TerrainTile>>>, // [plane][x][z]
-    pub locs: Vec<LocPlacement>,
-}
-
-/// A placed object in a map region.
-#[derive(Debug, Clone)]
-pub struct LocPlacement {
-    pub id: u32,
-    pub x: u8,
-    pub z: u8,
-    pub plane: u8,
-    pub loc_type: u8,
-    pub rotation: u8,
-}
-
-/// Full cache reader.
-pub struct CacheReader {
-    pub cache_dir: String,
-    pub item_defs: HashMap<u32, ItemDef>,
-    pub npc_defs: HashMap<u32, NpcDef>,
-    pub obj_defs: HashMap<u32, ObjDef>,
-    pub loaded_regions: HashMap<(u16, u16), MapRegion>,
-}
-
-impl CacheReader {
-    pub fn new(cache_dir: &str) -> Self {
-        CacheReader {
-            cache_dir: cache_dir.to_string(),
-            item_defs: HashMap::new(),
-            npc_defs: HashMap::new(),
-            obj_defs: HashMap::new(),
-            loaded_regions: HashMap::new(),
+impl NpcType {
+    fn new(id: u32) -> Self {
+        NpcType {
+            id,
+            name: "null".into(),
+            size: 1,
+            combat_level: -1,
+            ops: [None, None, None, None, None],
+            visible_on_minimap: true,
+            click_area: 128,
+            head_icon: -1,
         }
     }
 
-    /// Try to open and validate the cache.
-    pub fn validate(&self) -> Result<CacheInfo, String> {
-        let dat_path = format!("{}/main_file_cache.dat2", self.cache_dir);
-        let idx_path = format!("{}/main_file_cache.idx255", self.cache_dir);
+    /// Decode an NpcType from buffer data.
+    fn decode(id: u32, data: &[u8]) -> Result<Self> {
+        let mut npc = NpcType::new(id);
+        let mut buf = Buffer::wrap(data.to_vec());
 
-        if !Path::new(&dat_path).exists() {
-            return Err(format!("Cache data file not found: {}", dat_path));
-        }
-        if !Path::new(&idx_path).exists() {
-            return Err(format!("Reference index not found: {}", idx_path));
-        }
+        loop {
+            let opcode = buf.g1()?;
+            if opcode == 0 { break; }
 
-        // Count available indices
-        let mut idx_count = 0;
-        for i in 0..30 {
-            let path = format!("{}/main_file_cache.idx{}", self.cache_dir, i);
-            if Path::new(&path).exists() {
-                idx_count += 1;
+            match opcode {
+                1 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; }
+                }
+                2 => { npc.name = buf.gjstr()?; }
+                12 => { npc.size = buf.g1()?; }
+                13 => { let _ = buf.g2()?; } // standanim
+                14 => { let _ = buf.g2()?; } // walkanim
+                17 => {
+                    let _ = buf.g2()?; let _ = buf.g2()?;
+                    let _ = buf.g2()?; let _ = buf.g2()?;
+                }
+                30..=34 => {
+                    let s = buf.gjstr()?;
+                    npc.ops[(opcode - 30) as usize] = if s == "Hidden" { None } else { Some(s) };
+                }
+                40 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; let _ = buf.g2()?; }
+                }
+                41 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; let _ = buf.g2()?; }
+                }
+                42 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g1()?; }
+                }
+                60 => {
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; }
+                }
+                93 => { npc.visible_on_minimap = false; }
+                95 => { npc.combat_level = buf.g2()? as i16; }
+                97 => { npc.click_area = buf.g2()?; }
+                98 => { npc.head_icon = buf.g2()? as i16; }
+                99 | 100 | 101 | 102 | 103 => { let _ = buf.g2()?; }
+                106 | 118 => {
+                    let _ = buf.g2()?;
+                    let count = buf.g1()?;
+                    for _ in 0..count { let _ = buf.g2()?; }
+                }
+                107 | 109 => { /* boolean flags */ }
+                111 | 114 | 119 => { /* boolean flags */ }
+                113 => { let _ = buf.g2()?; let _ = buf.g2()?; }
+                249 => {
+                    let size = buf.g1()?;
+                    for _ in 0..size {
+                        let is_string = buf.g1()? == 1;
+                        let _ = buf.g3()?;
+                        if is_string { let _ = buf.gjstr()?; } else { let _ = buf.g4()?; }
+                    }
+                }
+                _ => { debug!("Unknown NpcType opcode: {} for npc {}", opcode, id); break; }
+            }
+        }
+        Ok(npc)
+    }
+}
+
+// ──────────────────────────── DefinitionLoader ────────────────────
+
+/// Loads and caches definitions from the JS5 cache.
+pub struct DefinitionLoader {
+    pub items: HashMap<u32, ObjType>,
+    pub npcs: HashMap<u32, NpcType>,
+}
+
+impl DefinitionLoader {
+    pub fn new() -> Self {
+        DefinitionLoader {
+            items: HashMap::new(),
+            npcs: HashMap::new(),
+        }
+    }
+
+    /// Load all item definitions from the cache.
+    pub fn load_items(&mut self, cache: &Js5Cache) -> Result<usize> {
+        let idx = cache.parsed_indices.get(&archives::CONFIG_OBJ)
+            .ok_or_else(|| anyhow::anyhow!("CONFIG_OBJ index (16) not found in cache"))?;
+
+        let mut count = 0;
+        for &gid in &idx.group_ids {
+            match cache.read_file(archives::CONFIG_OBJ, gid as u32) {
+                Ok(data) => {
+                    match ObjType::decode(gid as u32, &data) {
+                        Ok(obj) => {
+                            self.items.insert(gid as u32, obj);
+                            count += 1;
+                        }
+                        Err(e) => debug!("Failed to decode item {}: {}", gid, e),
+                    }
+                }
+                Err(e) => debug!("Failed to read item {}: {}", gid, e),
             }
         }
 
-        let dat_size = std::fs::metadata(&dat_path).map(|m| m.len()).unwrap_or(0);
-
-        Ok(CacheInfo {
-            dat_size,
-            index_count: idx_count,
-            valid: idx_count >= 10,
-        })
+        info!("Loaded {} item definitions", count);
+        Ok(count)
     }
 
-    /// Read a raw cache entry.
-    pub fn read_entry(&self, index: u8, archive: u32) -> Result<Vec<u8>, String> {
-        let idx_path = format!("{}/main_file_cache.idx{}", self.cache_dir, index);
-        let dat_path = format!("{}/main_file_cache.dat2", self.cache_dir);
+    /// Load all NPC definitions from the cache.
+    pub fn load_npcs(&mut self, cache: &Js5Cache) -> Result<usize> {
+        let idx = cache.parsed_indices.get(&archives::CONFIG_NPC)
+            .ok_or_else(|| anyhow::anyhow!("CONFIG_NPC index (18) not found in cache"))?;
 
-        let mut idx_file = File::open(&idx_path).map_err(|e| format!("idx open: {}", e))?;
-        let mut dat_file = File::open(&dat_path).map_err(|e| format!("dat open: {}", e))?;
-
-        // Read index entry
-        let offset = archive as u64 * INDEX_ENTRY_SIZE as u64;
-        idx_file.seek(SeekFrom::Start(offset)).map_err(|e| format!("idx seek: {}", e))?;
-
-        let mut entry = [0u8; 6];
-        idx_file.read_exact(&mut entry).map_err(|e| format!("idx read: {}", e))?;
-
-        let size = ((entry[0] as u32) << 16) | ((entry[1] as u32) << 8) | (entry[2] as u32);
-        let sector = ((entry[3] as u32) << 16) | ((entry[4] as u32) << 8) | (entry[5] as u32);
-
-        if size == 0 || sector == 0 {
-            return Err("Empty entry".to_string());
-        }
-
-        // Read data sectors
-        let mut data = Vec::with_capacity(size as usize);
-        let mut current_sector = sector;
-        let mut remaining = size as usize;
-        let mut chunk = 0u16;
-
-        while remaining > 0 {
-            let sector_offset = current_sector as u64 * SECTOR_SIZE as u64;
-            dat_file.seek(SeekFrom::Start(sector_offset)).map_err(|e| format!("dat seek: {}", e))?;
-
-            let mut header = [0u8; 8];
-            dat_file.read_exact(&mut header).map_err(|e| format!("dat header: {}", e))?;
-
-            let data_size = (SECTOR_SIZE - SECTOR_HEADER_SIZE).min(remaining);
-            let mut buf = vec![0u8; data_size];
-            dat_file.read_exact(&mut buf).map_err(|e| format!("dat read: {}", e))?;
-
-            data.extend_from_slice(&buf);
-            remaining -= data_size;
-
-            current_sector = ((header[4] as u32) << 16) | ((header[5] as u32) << 8) | (header[6] as u32);
-            chunk += 1;
-
-            if remaining > 0 && current_sector == 0 {
-                return Err("Broken sector chain".to_string());
+        let mut count = 0;
+        for &gid in &idx.group_ids {
+            match cache.read_file(archives::CONFIG_NPC, gid as u32) {
+                Ok(data) => {
+                    match NpcType::decode(gid as u32, &data) {
+                        Ok(npc) => {
+                            self.npcs.insert(gid as u32, npc);
+                            count += 1;
+                        }
+                        Err(e) => debug!("Failed to decode NPC {}: {}", gid, e),
+                    }
+                }
+                Err(e) => debug!("Failed to read NPC {}: {}", gid, e),
             }
         }
 
-        data.truncate(size as usize);
-        Ok(data)
+        info!("Loaded {} NPC definitions", count);
+        Ok(count)
     }
 
-    /// Load common item definitions from cache index 2.
-    pub fn load_item_defs(&mut self) {
-        // In a real implementation, we'd decode the config archive
-        // For now, populate with common RS items
-        let items = [
-            (995, "Coins", "Lovely money!", 1, false, true),
-            (1265, "Bronze dagger", "Short but pointy.", 10, false, false),
-            (1351, "Bronze axe", "A woodcutting axe.", 16, false, false),
-            (590, "Tinderbox", "Useful for lighting fires.", 1, false, false),
-            (1925, "Bucket", "It's a wooden bucket.", 2, false, false),
-            (2309, "Bread", "Nice, fresh bread.", 12, false, false),
-            (380, "Lobster", "A cooked lobster.", 150, false, false),
-            (1265, "Bronze pickaxe", "For mining rocks.", 15, false, false),
-            (556, "Air rune", "An air rune.", 4, false, true),
-            (555, "Water rune", "A water rune.", 6, false, true),
-            (554, "Fire rune", "A fire rune.", 6, false, true),
-            (557, "Earth rune", "An earth rune.", 5, false, true),
-            (558, "Mind rune", "A mind rune.", 3, false, true),
-            (526, "Bones", "Ew, bones.", 1, false, false),
-            (1511, "Logs", "Some logs.", 4, false, false),
-            (1521, "Oak logs", "Some oak logs.", 20, false, false),
-            (2150, "Cooked chicken", "Tasty cooked chicken.", 5, false, false),
-            (315, "Shrimps", "Some cooked shrimps.", 5, false, false),
-            (1205, "Bronze sword", "A razor-sharp sword.", 12, true, false),
-            (1277, "Bronze 2h sword", "A two-handed sword.", 40, true, false),
-        ];
-
-        for (id, name, examine, value, equipable, stackable) in &items {
-            self.item_defs.insert(*id, ItemDef {
-                id: *id,
-                name: name.to_string(),
-                examine: examine.to_string(),
-                value: *value,
-                members: false,
-                stackable: *stackable,
-                noted: false,
-                equipable: *equipable,
-                model_id: *id,
-                inv_model: *id,
-                zoom: 1500,
-                rotation_x: 0,
-                rotation_y: 0,
-            });
-        }
+    /// Get an item by ID.
+    pub fn get_item(&self, id: u32) -> Option<&ObjType> {
+        self.items.get(&id)
     }
 
-    /// Load NPC definitions.
-    pub fn load_npc_defs(&mut self) {
-        let npcs = [
-            (1, "Man", 2, 1, 808, 819),
-            (2, "Woman", 2, 1, 808, 819),
-            (3, "Guard", 21, 1, 808, 819),
-            (4, "Goblin", 5, 1, 808, 819),
-            (5, "Cow", 2, 2, 5851, 5852),
-            (6, "Chicken", 1, 1, 5387, 5388),
-            (7, "Rat", 1, 1, 2699, 2700),
-            (8, "Imp", 2, 1, 808, 819),
-            (9, "Dark wizard", 7, 1, 808, 819),
-            (10, "Giant spider", 2, 2, 5317, 5318),
-            (11, "Skeleton", 22, 1, 5485, 5486),
-            (12, "Zombie", 24, 1, 5568, 5569),
-        ];
-
-        for (id, name, combat, size, stand, walk) in &npcs {
-            let options = [
-                "Attack".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
-                "Examine".to_string(),
-            ];
-            self.npc_defs.insert(*id, NpcDef {
-                id: *id,
-                name: name.to_string(),
-                examine: format!("It's a {}.", name.to_lowercase()),
-                combat_level: *combat,
-                size: *size,
-                model_ids: vec![*id as u32],
-                stand_anim: *stand,
-                walk_anim: *walk,
-                options,
-                minimap_visible: true,
-                head_icon: -1,
-            });
-        }
+    /// Get an NPC by ID.
+    pub fn get_npc(&self, id: u32) -> Option<&NpcType> {
+        self.npcs.get(&id)
     }
-}
 
-/// Cache validation info.
-#[derive(Debug)]
-pub struct CacheInfo {
-    pub dat_size: u64,
-    pub index_count: u32,
-    pub valid: bool,
+    /// Search items by name (case-insensitive partial match).
+    pub fn search_items(&self, query: &str) -> Vec<&ObjType> {
+        let q = query.to_lowercase();
+        self.items.values()
+            .filter(|item| item.name.to_lowercase().contains(&q))
+            .collect()
+    }
+
+    /// Search NPCs by name.
+    pub fn search_npcs(&self, query: &str) -> Vec<&NpcType> {
+        let q = query.to_lowercase();
+        self.npcs.values()
+            .filter(|npc| npc.name.to_lowercase().contains(&q))
+            .collect()
+    }
 }
