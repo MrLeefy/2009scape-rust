@@ -1,10 +1,13 @@
 //! 2009Scape Rust Client
 
+pub mod audio;
 pub mod cache;
+pub mod combat;
 pub mod entity;
 pub mod game;
 pub mod net;
 pub mod render;
+pub mod skills;
 
 use game::Game;
 use render::Renderer;

@@ -5,6 +5,8 @@
 //! - main_file_cache.idx0..N: index files pointing into dat2
 //! Each index entry is 6 bytes: 3 bytes size + 3 bytes sector offset.
 
+pub mod loader;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
