@@ -184,6 +184,28 @@ impl Renderer3D {
         render_pass.draw_indexed(0..self.terrain_index_count, 0, 0..1);
     }
 
+    /// Render dynamic meshes (entities, objects) using the same pipeline.
+    pub fn render_dynamic(&self, device: &wgpu::Device, render_pass: &mut wgpu::RenderPass, vertices: &[Vertex3D], indices: &[u32]) {
+        if vertices.is_empty() || indices.is_empty() { return; }
+
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Entity VB"),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Entity IB"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vb.slice(..));
+        render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..indices.len() as u32, 0, 0..1);
+    }
+
     pub fn depth_view(&self) -> &wgpu::TextureView {
         &self.depth_texture
     }

@@ -3,6 +3,7 @@
 pub mod renderer2d;
 pub mod renderer3d;
 pub mod camera;
+pub mod entity_renderer;
 
 use renderer2d::Renderer2D;
 use renderer3d::Renderer3D;
@@ -143,6 +144,16 @@ impl Renderer {
                 let aspect = self.config.width as f32 / self.config.height as f32;
                 self.renderer_3d.update_camera(&self.queue, &self.camera, aspect);
 
+                // Collect entity meshes
+                let mut entity_verts = Vec::new();
+                let mut entity_indices = Vec::new();
+                for e in game.entities.all_entities() {
+                    let (verts, idxs) = entity_renderer::generate_entity_mesh(e);
+                    let base = entity_verts.len() as u32;
+                    entity_verts.extend_from_slice(&verts);
+                    entity_indices.extend(idxs.iter().map(|i| i + base));
+                }
+
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("3D Pass"),
@@ -165,9 +176,10 @@ impl Renderer {
                         ..Default::default()
                     });
                     self.renderer_3d.render(&mut render_pass);
+                    self.renderer_3d.render_dynamic(&self.device, &mut render_pass, &entity_verts, &entity_indices);
                 }
 
-                // 2D HUD overlay on top
+                // 2D HUD overlay
                 self.renderer_2d.begin();
                 self.draw_hud(game);
 
@@ -209,8 +221,6 @@ impl Renderer {
 
         r2d.fill_rect(px, py, panel_w, panel_h, [0.1, 0.1, 0.2, 0.9]);
         r2d.stroke_rect(px, py, panel_w, panel_h, 2.0, [0.3, 0.3, 0.6, 1.0]);
-
-        // Title
         r2d.fill_gradient_h(px + 2.0, py + 2.0, panel_w - 4.0, 40.0, [0.2, 0.15, 0.4, 1.0], [0.1, 0.1, 0.3, 1.0]);
         let gold = [0.85, 0.72, 0.2, 1.0];
         for i in 0..10 {
@@ -220,7 +230,6 @@ impl Renderer {
         let field_x = px + 30.0;
         let field_w = panel_w - 60.0;
 
-        // Username
         r2d.fill_rect(field_x, py + 65.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
         let ub = if game.active_field == 0 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 85.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
@@ -232,7 +241,6 @@ impl Renderer {
             r2d.fill_rect(field_x + 6.0 + (i as f32 * 8.0), py + 93.0, 6.0, 14.0, [1.0, 1.0, 1.0, 0.9]);
         }
 
-        // Password
         r2d.fill_rect(field_x, py + 130.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
         let pb = if game.active_field == 1 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 150.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
@@ -244,7 +252,6 @@ impl Renderer {
             r2d.fill_rect(field_x + 8.0 + (i as f32 * 8.0), py + 160.0, 5.0, 5.0, [1.0, 1.0, 1.0, 0.9]);
         }
 
-        // Login button
         let btn_x = px + (panel_w - 120.0) / 2.0;
         r2d.fill_gradient_v(btn_x, py + 200.0, 120.0, 36.0, [0.15, 0.4, 0.15, 1.0], [0.08, 0.25, 0.08, 1.0]);
         r2d.stroke_rect(btn_x, py + 200.0, 120.0, 36.0, 1.5, [0.3, 0.6, 0.3, 1.0]);
@@ -252,7 +259,6 @@ impl Renderer {
             r2d.fill_rect(btn_x + 28.0 + (i as f32 * 14.0), py + 210.0, 10.0, 16.0, [0.9, 0.8, 0.3, 1.0]);
         }
 
-        // Status
         if !game.status_message.is_empty() {
             let msg_w = game.status_message.len() as f32 * 7.0;
             let color = if game.status_message.contains("Error") { [1.0, 0.3, 0.3, 1.0] }
@@ -278,30 +284,198 @@ impl Renderer {
 
     fn draw_hud(&mut self, game: &super::game::Game) {
         let w = self.config.width as f32;
+        let h = self.config.height as f32;
         let r2d = &mut self.renderer_2d;
 
-        // Minimap background (top-right)
-        r2d.fill_rect(w - 160.0, 5.0, 155.0, 155.0, [0.1, 0.1, 0.15, 0.7]);
-        r2d.stroke_rect(w - 160.0, 5.0, 155.0, 155.0, 1.0, [0.4, 0.35, 0.2, 1.0]);
+        // ─── Minimap (top-right, circular-ish) ───
+        let mm_x = w - 160.0;
+        let mm_y = 5.0;
+        let mm_size = 152.0;
+        r2d.fill_rect(mm_x, mm_y, mm_size, mm_size, [0.08, 0.12, 0.08, 0.85]);
+        r2d.stroke_rect(mm_x, mm_y, mm_size, mm_size, 2.0, [0.5, 0.4, 0.2, 1.0]);
 
-        // Compass dot (center of minimap)
-        r2d.fill_rect(w - 85.0, 80.0, 6.0, 6.0, [1.0, 0.0, 0.0, 1.0]);
+        // Player dot (center)
+        r2d.fill_rect(mm_x + mm_size / 2.0 - 3.0, mm_y + mm_size / 2.0 - 3.0, 6.0, 6.0, [1.0, 1.0, 1.0, 1.0]);
 
-        // Chat box (bottom)
-        r2d.fill_rect(0.0, self.config.height as f32 - 140.0, 520.0, 140.0, [0.05, 0.05, 0.1, 0.8]);
-        r2d.stroke_rect(0.0, self.config.height as f32 - 140.0, 520.0, 140.0, 1.0, [0.3, 0.3, 0.5, 0.6]);
-
-        // Inventory panel (right side)
-        r2d.fill_rect(w - 200.0, 170.0, 195.0, 260.0, [0.08, 0.08, 0.12, 0.8]);
-        r2d.stroke_rect(w - 200.0, 170.0, 195.0, 260.0, 1.0, [0.4, 0.35, 0.2, 0.6]);
-
-        // Tab buttons along inventory top
-        for i in 0..7 {
-            let tx = w - 195.0 + (i as f32 * 27.0);
-            r2d.fill_rect(tx, 172.0, 25.0, 18.0, [0.15, 0.13, 0.1, 0.9]);
+        // NPC dots on minimap
+        for npc in &game.entities.npcs {
+            let dx = (npc.render_x() - game.entities.local_player.render_x()) / 50.0;
+            let dz = (npc.render_z() - game.entities.local_player.render_z()) / 50.0;
+            let mx = mm_x + mm_size / 2.0 + dx;
+            let mz = mm_y + mm_size / 2.0 + dz;
+            if mx > mm_x && mx < mm_x + mm_size && mz > mm_y && mz < mm_y + mm_size {
+                r2d.fill_rect(mx - 2.0, mz - 2.0, 4.0, 4.0, [1.0, 1.0, 0.0, 1.0]);
+            }
         }
 
-        // Info text area
-        r2d.fill_rect(5.0, 5.0, 200.0, 16.0, [0.3, 0.3, 0.3, 0.4]);
+        // Player dots on minimap
+        for p in &game.entities.players {
+            let dx = (p.render_x() - game.entities.local_player.render_x()) / 50.0;
+            let dz = (p.render_z() - game.entities.local_player.render_z()) / 50.0;
+            let mx = mm_x + mm_size / 2.0 + dx;
+            let mz = mm_y + mm_size / 2.0 + dz;
+            if mx > mm_x && mx < mm_x + mm_size && mz > mm_y && mz < mm_y + mm_size {
+                r2d.fill_rect(mx - 2.0, mz - 2.0, 4.0, 4.0, [0.3, 0.3, 1.0, 1.0]);
+            }
+        }
+
+        // Compass indicator
+        r2d.fill_rect(mm_x + mm_size / 2.0 - 2.0, mm_y + 5.0, 4.0, 8.0, [1.0, 0.0, 0.0, 1.0]);
+
+        // ─── Tab buttons (right side) ───
+        let tab_y = 165.0;
+        let tabs = ["Inv", "Skl", "Qst", "Equ", "Pry", "Mag", "Set"];
+        let tab_enums = [
+            super::game::InterfaceTab::Inventory,
+            super::game::InterfaceTab::Skills,
+            super::game::InterfaceTab::Quests,
+            super::game::InterfaceTab::Equipment,
+            super::game::InterfaceTab::Prayer,
+            super::game::InterfaceTab::Magic,
+            super::game::InterfaceTab::Settings,
+        ];
+        for (i, _tab) in tabs.iter().enumerate() {
+            let tx = w - 197.0 + (i as f32 * 28.0);
+            let active = game.active_tab == tab_enums[i];
+            let bg = if active { [0.25, 0.2, 0.15, 1.0] } else { [0.12, 0.1, 0.08, 0.9] };
+            r2d.fill_rect(tx, tab_y, 26.0, 20.0, bg);
+            r2d.stroke_rect(tx, tab_y, 26.0, 20.0, 1.0, [0.5, 0.4, 0.2, 0.8]);
+            // Tab icon (colored square)
+            r2d.fill_rect(tx + 7.0, tab_y + 4.0, 12.0, 12.0, if active { [0.8, 0.7, 0.3, 1.0] } else { [0.4, 0.35, 0.2, 0.8] });
+        }
+
+        // ─── Right panel content ───
+        let panel_x = w - 200.0;
+        let panel_y = 188.0;
+        let panel_w = 195.0;
+        let panel_h = h - panel_y - 5.0;
+        r2d.fill_rect(panel_x, panel_y, panel_w, panel_h, [0.06, 0.06, 0.1, 0.85]);
+        r2d.stroke_rect(panel_x, panel_y, panel_w, panel_h, 1.0, [0.4, 0.35, 0.2, 0.7]);
+
+        match game.active_tab {
+            super::game::InterfaceTab::Inventory => {
+                // 4 columns × 7 rows inventory grid
+                for row in 0..7 {
+                    for col in 0..4 {
+                        let slot = row * 4 + col;
+                        let sx = panel_x + 6.0 + col as f32 * 47.0;
+                        let sy = panel_y + 6.0 + row as f32 * 42.0;
+
+                        // Slot background
+                        r2d.fill_rect(sx, sy, 43.0, 38.0, [0.1, 0.1, 0.15, 0.6]);
+                        r2d.stroke_rect(sx, sy, 43.0, 38.0, 1.0, [0.25, 0.2, 0.15, 0.5]);
+
+                        if slot < game.inventory.len() {
+                            if let Some(item) = &game.inventory[slot] {
+                                // Item icon (colored square)
+                                r2d.fill_rect(sx + 8.0, sy + 4.0, 28.0, 24.0, item.color);
+                                r2d.stroke_rect(sx + 8.0, sy + 4.0, 28.0, 24.0, 1.0, [0.0, 0.0, 0.0, 0.3]);
+
+                                // Quantity indicator (if > 1)
+                                if item.quantity > 1 {
+                                    let qty_w = if item.quantity >= 1000 { 20.0 } else { 12.0 };
+                                    r2d.fill_rect(sx + 3.0, sy + 2.0, qty_w, 10.0, [1.0, 1.0, 0.0, 0.9]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            super::game::InterfaceTab::Skills => {
+                // Skills list (3 columns)
+                for (i, skill) in game.skills.iter().enumerate() {
+                    let col = (i % 3) as f32;
+                    let row = (i / 3) as f32;
+                    let sx = panel_x + 4.0 + col * 63.0;
+                    let sy = panel_y + 4.0 + row * 26.0;
+
+                    // Skill background
+                    r2d.fill_rect(sx, sy, 60.0, 24.0, [0.08, 0.08, 0.12, 0.7]);
+                    r2d.stroke_rect(sx, sy, 60.0, 24.0, 1.0, [0.2, 0.2, 0.3, 0.5]);
+
+                    // Skill icon
+                    r2d.fill_rect(sx + 2.0, sy + 4.0, 12.0, 16.0, skill.color);
+
+                    // Level number (represented as blocks)
+                    let level_tens = skill.level / 10;
+                    let level_ones = skill.level % 10;
+                    if level_tens > 0 {
+                        r2d.fill_rect(sx + 36.0, sy + 4.0, 7.0, 8.0, [1.0, 1.0, 1.0, 0.9]);
+                    }
+                    r2d.fill_rect(sx + 45.0, sy + 4.0, 7.0, 8.0, [1.0, 1.0, 1.0, 0.9]);
+
+                    // XP bar
+                    let xp_pct = (skill.xp as f32 / (skill.level as f32 * 500.0 + 100.0)).min(1.0);
+                    r2d.fill_rect(sx + 16.0, sy + 16.0, 42.0, 5.0, [0.15, 0.15, 0.2, 1.0]);
+                    r2d.fill_rect(sx + 16.0, sy + 16.0, 42.0 * xp_pct, 5.0, skill.color);
+                }
+
+                // Total level
+                let total: u32 = game.skills.iter().map(|s| s.level as u32).sum();
+                r2d.fill_rect(panel_x + 10.0, panel_y + panel_h - 25.0, 175.0, 20.0, [0.1, 0.1, 0.15, 0.8]);
+                // "Total" label blocks
+                for i in 0..5 {
+                    r2d.fill_rect(panel_x + 15.0 + i as f32 * 8.0, panel_y + panel_h - 22.0, 6.0, 14.0, [0.8, 0.7, 0.3, 0.9]);
+                }
+                // Total level blocks
+                for i in 0..format!("{}", total).len() {
+                    r2d.fill_rect(panel_x + 100.0 + i as f32 * 8.0, panel_y + panel_h - 22.0, 6.0, 14.0, [1.0, 1.0, 1.0, 0.9]);
+                }
+            }
+            _ => {
+                // Placeholder for other tabs
+                r2d.fill_rect(panel_x + 20.0, panel_y + 30.0, 155.0, 20.0, [0.5, 0.5, 0.5, 0.4]);
+            }
+        }
+
+        // ─── Chat box (bottom-left) ───
+        let chat_x = 0.0;
+        let chat_y = h - 142.0;
+        let chat_w = w - 205.0;
+        let chat_h = 142.0;
+        r2d.fill_rect(chat_x, chat_y, chat_w, chat_h, [0.03, 0.03, 0.08, 0.85]);
+        r2d.stroke_rect(chat_x, chat_y, chat_w, chat_h, 1.0, [0.3, 0.3, 0.5, 0.6]);
+
+        // Chat messages (last 8)
+        let msg_start = if game.chat_messages.len() > 8 { game.chat_messages.len() - 8 } else { 0 };
+        for (i, msg) in game.chat_messages[msg_start..].iter().enumerate() {
+            let my = chat_y + 5.0 + (i as f32 * 15.0);
+            // Sender blocks
+            let sender_w = msg.sender.len() as f32 * 6.0;
+            r2d.fill_rect(chat_x + 5.0, my, sender_w, 12.0, msg.color);
+            // Message blocks
+            let text_w = msg.text.len() as f32 * 5.0;
+            r2d.fill_rect(chat_x + 10.0 + sender_w, my, text_w.min(chat_w - sender_w - 20.0), 12.0, [0.8, 0.8, 0.8, 0.7]);
+        }
+
+        // Chat input bar
+        let input_y = h - 20.0;
+        r2d.fill_rect(chat_x, input_y, chat_w, 20.0, [0.05, 0.05, 0.1, 0.9]);
+        r2d.stroke_rect(chat_x, input_y, chat_w, 20.0, 1.0, if game.chat_active { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 0.6] });
+
+        if game.chat_active {
+            // Input text
+            for (i, _) in game.chat_input.chars().enumerate() {
+                r2d.fill_rect(chat_x + 5.0 + (i as f32 * 7.0), input_y + 4.0, 5.0, 12.0, [1.0, 1.0, 1.0, 0.9]);
+            }
+            // Blinking cursor
+            if (game.tick / 30) % 2 == 0 {
+                let cx = chat_x + 5.0 + (game.chat_input.len() as f32 * 7.0);
+                r2d.fill_rect(cx, input_y + 3.0, 2.0, 14.0, [1.0, 1.0, 1.0, 0.8]);
+            }
+        }
+
+        // ─── Player info (top-left) ───
+        r2d.fill_rect(5.0, 5.0, 180.0, 40.0, [0.05, 0.05, 0.1, 0.7]);
+        r2d.stroke_rect(5.0, 5.0, 180.0, 40.0, 1.0, [0.3, 0.3, 0.5, 0.5]);
+
+        // HP bar
+        let hp_pct = game.entities.local_player.health as f32 / game.entities.local_player.max_health as f32;
+        r2d.fill_rect(10.0, 10.0, 170.0, 12.0, [0.3, 0.0, 0.0, 1.0]);
+        r2d.fill_rect(10.0, 10.0, 170.0 * hp_pct, 12.0, [0.0, 0.7, 0.0, 1.0]);
+
+        // Prayer bar (below HP)
+        r2d.fill_rect(10.0, 27.0, 170.0, 12.0, [0.2, 0.2, 0.0, 1.0]);
+        r2d.fill_rect(10.0, 27.0, 170.0, 12.0, [0.3, 0.3, 0.7, 1.0]);
     }
 }

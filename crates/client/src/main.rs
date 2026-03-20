@@ -1,6 +1,7 @@
 //! 2009Scape Rust Client
 
 pub mod cache;
+pub mod entity;
 pub mod game;
 pub mod net;
 pub mod render;
