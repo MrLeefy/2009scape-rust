@@ -4,6 +4,7 @@ pub mod renderer2d;
 pub mod renderer3d;
 pub mod camera;
 pub mod entity_renderer;
+pub mod font;
 
 use renderer2d::Renderer2D;
 use renderer3d::Renderer3D;

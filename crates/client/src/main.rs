@@ -5,9 +5,11 @@ pub mod cache;
 pub mod combat;
 pub mod entity;
 pub mod game;
+pub mod input;
 pub mod net;
 pub mod render;
 pub mod skills;
+pub mod web;
 
 use game::Game;
 use render::Renderer;
