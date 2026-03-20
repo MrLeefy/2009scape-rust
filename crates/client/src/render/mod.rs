@@ -224,25 +224,21 @@ impl Renderer {
         r2d.stroke_rect(px, py, panel_w, panel_h, 2.0, [0.3, 0.3, 0.6, 1.0]);
         r2d.fill_gradient_h(px + 2.0, py + 2.0, panel_w - 4.0, 40.0, [0.2, 0.15, 0.4, 1.0], [0.1, 0.1, 0.3, 1.0]);
         let gold = [0.85, 0.72, 0.2, 1.0];
-        for i in 0..10 {
-            r2d.fill_rect(px + 90.0 + (i as f32 * 18.0), py + 12.0, 14.0, 16.0, gold);
-        }
+        font::draw_centered(r2d, "2009SCAPE", px + panel_w / 2.0, py + 14.0, gold, 2.0);
 
         let field_x = px + 30.0;
         let field_w = panel_w - 60.0;
 
-        r2d.fill_rect(field_x, py + 65.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
+        font::draw_shadow(r2d, "Username:", field_x, py + 67.0, [0.6, 0.6, 0.8, 0.8], 2.0);
         let ub = if game.active_field == 0 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 85.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
         r2d.stroke_rect(field_x, py + 85.0, field_w, 30.0, 1.5, ub);
         if game.active_field == 0 && (game.tick / 30) % 2 == 0 {
             r2d.fill_rect(field_x + 6.0 + (game.username.len() as f32 * 8.0), py + 90.0, 2.0, 20.0, [1.0, 1.0, 1.0, 0.8]);
         }
-        for (i, _) in game.username.chars().enumerate() {
-            r2d.fill_rect(field_x + 6.0 + (i as f32 * 8.0), py + 93.0, 6.0, 14.0, [1.0, 1.0, 1.0, 0.9]);
-        }
+        font::draw_shadow(r2d, &game.username, field_x + 6.0, py + 93.0, [1.0, 1.0, 1.0, 0.9], 2.0);
 
-        r2d.fill_rect(field_x, py + 130.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
+        font::draw_shadow(r2d, "Password:", field_x, py + 132.0, [0.6, 0.6, 0.8, 0.8], 2.0);
         let pb = if game.active_field == 1 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 150.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
         r2d.stroke_rect(field_x, py + 150.0, field_w, 30.0, 1.5, pb);
@@ -256,16 +252,13 @@ impl Renderer {
         let btn_x = px + (panel_w - 120.0) / 2.0;
         r2d.fill_gradient_v(btn_x, py + 200.0, 120.0, 36.0, [0.15, 0.4, 0.15, 1.0], [0.08, 0.25, 0.08, 1.0]);
         r2d.stroke_rect(btn_x, py + 200.0, 120.0, 36.0, 1.5, [0.3, 0.6, 0.3, 1.0]);
-        for i in 0..5 {
-            r2d.fill_rect(btn_x + 28.0 + (i as f32 * 14.0), py + 210.0, 10.0, 16.0, [0.9, 0.8, 0.3, 1.0]);
-        }
+        font::draw_centered(r2d, "LOGIN", btn_x + 60.0, py + 210.0, [0.9, 0.8, 0.3, 1.0], 2.0);
 
         if !game.status_message.is_empty() {
-            let msg_w = game.status_message.len() as f32 * 7.0;
             let color = if game.status_message.contains("Error") { [1.0, 0.3, 0.3, 1.0] }
                 else if game.status_message.contains("Connecting") { [1.0, 1.0, 0.3, 1.0] }
                 else { [0.7, 0.7, 0.7, 0.8] };
-            r2d.fill_rect(px + (panel_w - msg_w) / 2.0, py + 250.0, msg_w, 14.0, color);
+            font::draw_centered(r2d, &game.status_message, px + panel_w / 2.0, py + 252.0, color, 1.5);
         }
     }
 
@@ -335,14 +328,14 @@ impl Renderer {
             super::game::InterfaceTab::Magic,
             super::game::InterfaceTab::Settings,
         ];
-        for (i, _tab) in tabs.iter().enumerate() {
+        for (i, tab) in tabs.iter().enumerate() {
             let tx = w - 197.0 + (i as f32 * 28.0);
             let active = game.active_tab == tab_enums[i];
             let bg = if active { [0.25, 0.2, 0.15, 1.0] } else { [0.12, 0.1, 0.08, 0.9] };
             r2d.fill_rect(tx, tab_y, 26.0, 20.0, bg);
             r2d.stroke_rect(tx, tab_y, 26.0, 20.0, 1.0, [0.5, 0.4, 0.2, 0.8]);
-            // Tab icon (colored square)
-            r2d.fill_rect(tx + 7.0, tab_y + 4.0, 12.0, 12.0, if active { [0.8, 0.7, 0.3, 1.0] } else { [0.4, 0.35, 0.2, 0.8] });
+            let tc = if active { [0.8, 0.7, 0.3, 1.0] } else { [0.4, 0.35, 0.2, 0.8] };
+            font::draw_text(r2d, tab, tx + 2.0, tab_y + 6.0, tc, 1.0);
         }
 
         // ─── Right panel content ───
@@ -441,12 +434,10 @@ impl Renderer {
         let msg_start = if game.chat_messages.len() > 8 { game.chat_messages.len() - 8 } else { 0 };
         for (i, msg) in game.chat_messages[msg_start..].iter().enumerate() {
             let my = chat_y + 5.0 + (i as f32 * 15.0);
-            // Sender blocks
-            let sender_w = msg.sender.len() as f32 * 6.0;
-            r2d.fill_rect(chat_x + 5.0, my, sender_w, 12.0, msg.color);
-            // Message blocks
-            let text_w = msg.text.len() as f32 * 5.0;
-            r2d.fill_rect(chat_x + 10.0 + sender_w, my, text_w.min(chat_w - sender_w - 20.0), 12.0, [0.8, 0.8, 0.8, 0.7]);
+            let sender_w = msg.sender.len() as f32 * 6.0 + 6.0;
+            font::draw_text(r2d, &msg.sender, chat_x + 5.0, my, msg.color, 1.0);
+            font::draw_text(r2d, ":", chat_x + 5.0 + msg.sender.len() as f32 * 6.0, my, msg.color, 1.0);
+            font::draw_text(r2d, &msg.text, chat_x + 5.0 + sender_w, my, [0.8, 0.8, 0.8, 0.7], 1.0);
         }
 
         // Chat input bar
@@ -455,10 +446,7 @@ impl Renderer {
         r2d.stroke_rect(chat_x, input_y, chat_w, 20.0, 1.0, if game.chat_active { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 0.6] });
 
         if game.chat_active {
-            // Input text
-            for (i, _) in game.chat_input.chars().enumerate() {
-                r2d.fill_rect(chat_x + 5.0 + (i as f32 * 7.0), input_y + 4.0, 5.0, 12.0, [1.0, 1.0, 1.0, 0.9]);
-            }
+            font::draw_text(r2d, &game.chat_input, chat_x + 5.0, input_y + 4.0, [1.0, 1.0, 1.0, 0.9], 1.5);
             // Blinking cursor
             if (game.tick / 30) % 2 == 0 {
                 let cx = chat_x + 5.0 + (game.chat_input.len() as f32 * 7.0);
@@ -476,7 +464,12 @@ impl Renderer {
         r2d.fill_rect(10.0, 10.0, 170.0 * hp_pct, 12.0, [0.0, 0.7, 0.0, 1.0]);
 
         // Prayer bar (below HP)
+        let prayer_pct = 1.0f32; // full prayer for now
         r2d.fill_rect(10.0, 27.0, 170.0, 12.0, [0.2, 0.2, 0.0, 1.0]);
-        r2d.fill_rect(10.0, 27.0, 170.0, 12.0, [0.3, 0.3, 0.7, 1.0]);
+        r2d.fill_rect(10.0, 27.0, 170.0 * prayer_pct, 12.0, [0.3, 0.3, 0.7, 1.0]);
+
+        // Labels
+        font::draw_shadow(r2d, "HP", 12.0, 11.0, [1.0, 1.0, 1.0, 0.9], 1.0);
+        font::draw_shadow(r2d, "PRAY", 12.0, 28.0, [1.0, 1.0, 1.0, 0.9], 1.0);
     }
 }

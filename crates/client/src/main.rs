@@ -12,6 +12,7 @@ pub mod skills;
 pub mod web;
 
 use game::Game;
+use input::InputState;
 use render::Renderer;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -27,6 +28,7 @@ struct App {
     renderer: Option<Renderer>,
     game: Game,
     keys_held: HashSet<String>,
+    input: InputState,
 }
 
 impl App {
@@ -36,6 +38,7 @@ impl App {
             renderer: None,
             game: Game::new(),
             keys_held: HashSet::new(),
+            input: InputState::new(),
         }
     }
 
@@ -67,6 +70,11 @@ impl App {
         // Zoom with Z/X
         if self.keys_held.contains("z") { renderer.camera.zoom = (renderer.camera.zoom - 10.0).max(100.0); }
         if self.keys_held.contains("x") { renderer.camera.zoom = (renderer.camera.zoom + 10.0).min(2000.0); }
+
+        // Scroll wheel zoom
+        if self.input.scroll_delta != 0.0 {
+            renderer.camera.zoom = (renderer.camera.zoom - self.input.scroll_delta * 20.0).clamp(100.0, 2000.0);
+        }
     }
 }
 
@@ -135,10 +143,8 @@ impl ApplicationHandler for App {
                         }
                         Key::Named(NamedKey::Backspace) => self.game.on_backspace(),
                         Key::Character(c) => {
-                            if self.game.state == game::GameState::Login {
-                                for ch in c.chars() {
-                                    self.game.on_char(ch);
-                                }
+                            for ch in c.chars() {
+                                self.game.on_char(ch);
                             }
                         }
                         _ => {}
@@ -146,6 +152,30 @@ impl ApplicationHandler for App {
                 } else {
                     self.keys_held.remove(&key_str);
                 }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.on_move(position.x as f32, position.y as f32);
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                let is_left = button == winit::event::MouseButton::Left;
+                let is_right = button == winit::event::MouseButton::Right;
+                if state.is_pressed() {
+                    if is_left { self.input.on_left_press(); }
+                    if is_right { self.input.on_right_press(); }
+                } else {
+                    if is_left { self.input.on_left_release(); }
+                    if is_right { self.input.on_right_release(); }
+                }
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                let d = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 30.0,
+                };
+                self.input.on_scroll(d);
             }
 
             WindowEvent::RedrawRequested => {
@@ -157,6 +187,8 @@ impl ApplicationHandler for App {
                         log::error!("Render error: {}", e);
                     }
                 }
+
+                self.input.end_frame();
 
                 if let Some(window) = &self.window {
                     window.request_redraw();
