@@ -464,12 +464,66 @@ impl Renderer {
         r2d.fill_rect(10.0, 10.0, 170.0 * hp_pct, 12.0, [0.0, 0.7, 0.0, 1.0]);
 
         // Prayer bar (below HP)
-        let prayer_pct = 1.0f32; // full prayer for now
+        let prayer_pct = 1.0f32;
         r2d.fill_rect(10.0, 27.0, 170.0, 12.0, [0.2, 0.2, 0.0, 1.0]);
         r2d.fill_rect(10.0, 27.0, 170.0 * prayer_pct, 12.0, [0.3, 0.3, 0.7, 1.0]);
+
+        // Run energy bar
+        let run_pct = game.run_energy / 100.0;
+        r2d.fill_rect(10.0, 44.0, 170.0, 8.0, [0.15, 0.15, 0.1, 0.8]);
+        r2d.fill_rect(10.0, 44.0, 170.0 * run_pct, 8.0, [0.1, 0.6, 0.1, 0.9]);
+
+        // Special attack bar
+        let spec_pct = game.combat.special_energy / 100.0;
+        r2d.fill_rect(10.0, 55.0, 170.0, 8.0, [0.15, 0.15, 0.05, 0.8]);
+        r2d.fill_rect(10.0, 55.0, 170.0 * spec_pct, 8.0, [0.8, 0.7, 0.0, 0.9]);
 
         // Labels
         font::draw_shadow(r2d, "HP", 12.0, 11.0, [1.0, 1.0, 1.0, 0.9], 1.0);
         font::draw_shadow(r2d, "PRAY", 12.0, 28.0, [1.0, 1.0, 1.0, 0.9], 1.0);
+        font::draw_shadow(r2d, "RUN", 12.0, 44.0, [1.0, 1.0, 1.0, 0.7], 1.0);
+        font::draw_shadow(r2d, "SPEC", 12.0, 55.0, [1.0, 1.0, 1.0, 0.7], 1.0);
+
+        // ─── Hit splats ───
+        for splat in &game.combat.hit_splats {
+            let alpha = (splat.timer / 1.5).min(1.0);
+            let (bg, text_color) = match splat.hit_type {
+                super::combat::HitType::Normal => ([0.7, 0.0, 0.0, alpha], [1.0, 1.0, 1.0, alpha]),
+                super::combat::HitType::Block => ([0.0, 0.0, 0.7, alpha], [1.0, 1.0, 1.0, alpha]),
+                super::combat::HitType::Poison => ([0.0, 0.5, 0.0, alpha], [1.0, 1.0, 1.0, alpha]),
+                _ => ([0.5, 0.5, 0.5, alpha], [1.0, 1.0, 1.0, alpha]),
+            };
+            // Show near top-center of screen
+            let sx = w / 2.0 - 20.0;
+            let sy = 80.0 + (1.5 - splat.timer) * 15.0;
+            r2d.fill_rect(sx, sy, 40.0, 18.0, bg);
+            let dmg_str = format!("{}", splat.damage);
+            font::draw_centered(r2d, &dmg_str, sx + 20.0, sy + 4.0, text_color, 1.5);
+        }
+
+        // ─── XP drops ───
+        for (i, drop) in game.combat.xp_drops.iter().enumerate() {
+            let alpha = (drop.timer / 2.0).min(1.0);
+            let dy = drop.y_offset;
+            let xp_x = w / 2.0 + 60.0;
+            let xp_y = 100.0 - dy + i as f32 * 2.0;
+            let mut color = drop.color;
+            color[3] = alpha;
+            let text = format!("+{:.0} {}", drop.amount, drop.skill_name);
+            font::draw_shadow(r2d, &text, xp_x, xp_y, color, 1.0);
+        }
+
+        // ─── Music track indicator (bottom-right) ───
+        if let Some(track) = &game.audio.current_track {
+            let track_text = format!("Now: {}", track.name);
+            font::draw_shadow(r2d, &track_text, w - 190.0, h - 158.0, [0.6, 0.6, 0.4, 0.6], 1.0);
+        }
+
+        // ─── Combat status ───
+        if game.combat.in_combat {
+            r2d.fill_rect(190.0, 10.0, 8.0, 8.0, [1.0, 0.0, 0.0, 0.8]);
+            font::draw_text(r2d, "COMBAT", 200.0, 10.0, [1.0, 0.3, 0.3, 0.8], 1.0);
+        }
     }
 }
+

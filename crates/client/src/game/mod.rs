@@ -1,6 +1,9 @@
 //! Game state machine and main loop logic.
 
 use crate::entity::EntityManager;
+use crate::combat::{CombatSystem, HitType};
+use crate::audio::{AudioEngine, SoundEffect};
+use crate::net::protocol::PacketHandler;
 
 /// High-level game states.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,6 +71,11 @@ pub struct Game {
     pub active_tab: InterfaceTab,
     pub chat_input: String,
     pub chat_active: bool,
+    pub combat: CombatSystem,
+    pub audio: AudioEngine,
+    pub packets: PacketHandler,
+    pub run_energy: f32,
+    pub world_region: String,
 }
 
 impl Game {
@@ -90,6 +98,11 @@ impl Game {
             active_tab: InterfaceTab::Inventory,
             chat_input: String::new(),
             chat_active: false,
+            combat: CombatSystem::new(),
+            audio: AudioEngine::new(),
+            packets: PacketHandler::new(),
+            run_energy: 100.0,
+            world_region: "Lumbridge".to_string(),
         };
 
         // Initialize inventory with some test items
@@ -158,8 +171,104 @@ impl Game {
 
     pub fn tick(&mut self) {
         self.tick += 1;
+        let dt = 1.0 / 60.0;
         if self.state == GameState::InGame {
-            self.entities.tick(1.0 / 60.0);
+            self.entities.tick(dt);
+            self.combat.tick(dt);
+
+            let player_pos = (
+                self.entities.local_player.render_x(),
+                0.0,
+                self.entities.local_player.render_z(),
+            );
+            self.audio.tick(dt, player_pos.0, player_pos.1, player_pos.2);
+
+            // Process any pending packet updates
+            self.process_packet_updates();
+
+            // Demo: auto-attack first nearby NPC every 4 seconds for testing
+            if self.tick % 240 == 120 && !self.entities.npcs.is_empty() {
+                let attacker = self.entities.local_player.clone();
+                let target_pos = (self.entities.npcs[0].x, self.entities.npcs[0].z);
+                let dmg = self.combat.attack(&attacker, &mut self.entities.npcs[0]);
+                if let Some(d) = dmg {
+                    if d > 0 {
+                        self.audio.play_sfx(SoundEffect::MeleeHit, target_pos.0, 0.0, target_pos.1);
+                    } else {
+                        self.audio.play_sfx(SoundEffect::MeleeMiss, target_pos.0, 0.0, target_pos.1);
+                    }
+                }
+                // Respawn NPC if dead (separate borrow scope)
+                let npc = &self.entities.npcs[0];
+                if npc.health == 0 {
+                    let name = npc.name.clone();
+                    self.audio.play_sfx(SoundEffect::NpcDeath, target_pos.0, 0.0, target_pos.1);
+                    self.entities.npcs[0].health = self.entities.npcs[0].max_health;
+                    self.chat_messages.push(ChatMessage {
+                        sender: "System".into(),
+                        text: format!("{} has been defeated!", name),
+                        color: [1.0, 0.3, 0.3, 1.0],
+                        timestamp: self.tick,
+                    });
+                }
+            }
+
+            // Set region music on first tick
+            if self.tick == 2 {
+                self.audio.set_region_music(&self.world_region);
+            }
+        } else if self.state == GameState::Login {
+            self.audio.set_region_music("Login");
+        }
+    }
+
+    /// Process queued server packet updates into game state.
+    fn process_packet_updates(&mut self) {
+        // Stats
+        for (skill_id, level, xp) in self.packets.stat_updates.drain(..) {
+            if let Some(skill) = self.skills.get_mut(skill_id as usize) {
+                skill.level = level;
+                skill.xp = xp;
+            }
+        }
+
+        // Chat
+        for (sender, text) in self.packets.chat_updates.drain(..) {
+            self.chat_messages.push(ChatMessage {
+                sender,
+                text,
+                color: [0.0, 0.8, 0.8, 1.0],
+                timestamp: self.tick,
+            });
+        }
+
+        // Inventory
+        for (slot, item_id, quantity) in self.packets.inv_updates.drain(..) {
+            let slot = slot as usize;
+            if slot < self.inventory.len() {
+                if item_id > 0 {
+                    self.inventory[slot] = Some(Item {
+                        id: item_id,
+                        name: format!("Item {}", item_id),
+                        quantity,
+                        color: [0.5, 0.5, 0.5, 1.0],
+                    });
+                } else {
+                    self.inventory[slot] = None;
+                }
+            }
+        }
+
+        // Sound effects from server
+        for (sound_id, _volume, _delay) in self.packets.sound_updates.drain(..) {
+            // Map server sound IDs to our SFX enum (simplified)
+            let sfx = match sound_id {
+                2727 => SoundEffect::MeleeHit,
+                2724 => SoundEffect::MeleeMiss,
+                2277 => SoundEffect::LevelUp,
+                _ => SoundEffect::ButtonClick,
+            };
+            self.audio.play_ui_sfx(sfx);
         }
     }
 
@@ -209,6 +318,7 @@ impl Game {
                     InterfaceTab::Magic => InterfaceTab::Settings,
                     InterfaceTab::Settings => InterfaceTab::Inventory,
                 };
+                self.audio.play_ui_sfx(SoundEffect::TabSwitch);
             }
             _ => {}
         }
