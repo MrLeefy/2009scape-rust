@@ -1,8 +1,12 @@
 //! wgpu-based renderer — handles both native and WASM rendering.
 
 pub mod renderer2d;
+pub mod renderer3d;
+pub mod camera;
 
 use renderer2d::Renderer2D;
+use renderer3d::Renderer3D;
+use camera::Camera3D;
 use wgpu;
 use winit::window::Window;
 use anyhow::Result;
@@ -23,10 +27,11 @@ pub struct Renderer {
     pub config: wgpu::SurfaceConfiguration,
     pub quality: RenderQuality,
     pub renderer_2d: Renderer2D,
+    pub renderer_3d: Renderer3D,
+    pub camera: Camera3D,
 }
 
 impl Renderer {
-    /// Initialize the wgpu renderer from a window.
     pub async fn new(window: &'static Window) -> Result<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -75,30 +80,28 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let renderer_2d = Renderer2D::new(&device, &queue, format, config.width, config.height);
+        let renderer_3d = Renderer3D::new(&device, format, config.width, config.height);
+        let camera = Camera3D::new();
 
         info!("Renderer initialized: {}x{}, format: {:?}", config.width, config.height, format);
 
         Ok(Renderer {
-            surface,
-            device,
-            queue,
-            config,
+            surface, device, queue, config,
             quality: RenderQuality::Standard,
-            renderer_2d,
+            renderer_2d, renderer_3d, camera,
         })
     }
 
-    /// Resize the render surface.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.renderer_2d.resize(&self.queue, width, height);
+            self.renderer_3d.resize(&self.device, width, height);
         }
     }
 
-    /// Render a frame with the game state.
     pub fn render(&mut self, game: &super::game::Game) -> Result<()> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -107,39 +110,84 @@ impl Renderer {
             label: Some("Frame Encoder"),
         });
 
-        // Start 2D batch
-        self.renderer_2d.begin();
-
-        // Draw based on game state
         match game.state {
-            super::game::GameState::Login => {
-                self.draw_login_screen(game);
+            super::game::GameState::Login | super::game::GameState::Loading => {
+                // 2D login/loading screen
+                self.renderer_2d.begin();
+                if game.state == super::game::GameState::Login {
+                    self.draw_login_screen(game);
+                } else {
+                    self.draw_loading_screen(game);
+                }
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("2D Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
+                    self.renderer_2d.flush(&self.device, &mut render_pass);
+                }
             }
-            super::game::GameState::Loading => {
-                self.draw_loading_screen(game);
-            }
+
             super::game::GameState::InGame => {
-                // Phase 3+: world rendering
+                // 3D world rendering
+                let aspect = self.config.width as f32 / self.config.height as f32;
+                self.renderer_3d.update_camera(&self.queue, &self.camera, aspect);
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("3D Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.08, b: 0.15, a: 1.0 }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: self.renderer_3d.depth_view(),
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    self.renderer_3d.render(&mut render_pass);
+                }
+
+                // 2D HUD overlay on top
+                self.renderer_2d.begin();
+                self.draw_hud(game);
+
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("HUD Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        ..Default::default()
+                    });
+                    self.renderer_2d.flush(&self.device, &mut render_pass);
+                }
             }
-        }
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Main Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-
-            // Flush 2D quads
-            self.renderer_2d.flush(&self.device, &mut render_pass);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -152,119 +200,66 @@ impl Renderer {
         let h = self.config.height as f32;
         let r2d = &mut self.renderer_2d;
 
-        // Background gradient (dark blue to black)
-        r2d.fill_gradient_v(0.0, 0.0, w, h,
-            [0.05, 0.05, 0.15, 1.0],
-            [0.0, 0.0, 0.0, 1.0],
-        );
+        r2d.fill_gradient_v(0.0, 0.0, w, h, [0.05, 0.05, 0.15, 1.0], [0.0, 0.0, 0.0, 1.0]);
 
-        // Center panel
         let panel_w = 350.0;
         let panel_h = 280.0;
         let px = (w - panel_w) / 2.0;
         let py = (h - panel_h) / 2.0;
 
-        // Panel background
         r2d.fill_rect(px, py, panel_w, panel_h, [0.1, 0.1, 0.2, 0.9]);
-
-        // Panel border
         r2d.stroke_rect(px, py, panel_w, panel_h, 2.0, [0.3, 0.3, 0.6, 1.0]);
 
-        // Title bar
-        r2d.fill_gradient_h(px + 2.0, py + 2.0, panel_w - 4.0, 40.0,
-            [0.2, 0.15, 0.4, 1.0],
-            [0.1, 0.1, 0.3, 1.0],
-        );
-
-        // "2009Scape" title (represented as colored blocks since we don't have font rendering yet)
-        // Golden blocks spelling out "2009Scape" in a pixel-art style
-        let title_y = py + 12.0;
+        // Title
+        r2d.fill_gradient_h(px + 2.0, py + 2.0, panel_w - 4.0, 40.0, [0.2, 0.15, 0.4, 1.0], [0.1, 0.1, 0.3, 1.0]);
         let gold = [0.85, 0.72, 0.2, 1.0];
         for i in 0..10 {
-            let bx = px + 90.0 + (i as f32 * 18.0);
-            r2d.fill_rect(bx, title_y, 14.0, 16.0, gold);
+            r2d.fill_rect(px + 90.0 + (i as f32 * 18.0), py + 12.0, 14.0, 16.0, gold);
         }
 
-        // Username field
         let field_x = px + 30.0;
         let field_w = panel_w - 60.0;
 
-        // Username label area
+        // Username
         r2d.fill_rect(field_x, py + 65.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
-
-        // Username input box
-        let uname_active = game.active_field == 0;
-        let uname_border = if uname_active { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
+        let ub = if game.active_field == 0 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 85.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
-        r2d.stroke_rect(field_x, py + 85.0, field_w, 30.0, 1.5, uname_border);
-
-        // Username text cursor (blinking)
-        if uname_active && (game.tick / 30) % 2 == 0 {
-            let cursor_x = field_x + 6.0 + (game.username.len() as f32 * 8.0);
-            r2d.fill_rect(cursor_x, py + 90.0, 2.0, 20.0, [1.0, 1.0, 1.0, 0.8]);
+        r2d.stroke_rect(field_x, py + 85.0, field_w, 30.0, 1.5, ub);
+        if game.active_field == 0 && (game.tick / 30) % 2 == 0 {
+            r2d.fill_rect(field_x + 6.0 + (game.username.len() as f32 * 8.0), py + 90.0, 2.0, 20.0, [1.0, 1.0, 1.0, 0.8]);
         }
-
-        // Username text (white blocks per character)
         for (i, _) in game.username.chars().enumerate() {
             r2d.fill_rect(field_x + 6.0 + (i as f32 * 8.0), py + 93.0, 6.0, 14.0, [1.0, 1.0, 1.0, 0.9]);
         }
 
-        // Password label area  
+        // Password
         r2d.fill_rect(field_x, py + 130.0, 80.0, 16.0, [0.6, 0.6, 0.8, 0.8]);
-
-        // Password input box
-        let pass_active = game.active_field == 1;
-        let pass_border = if pass_active { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
+        let pb = if game.active_field == 1 { [0.5, 0.7, 1.0, 1.0] } else { [0.3, 0.3, 0.5, 1.0] };
         r2d.fill_rect(field_x, py + 150.0, field_w, 30.0, [0.05, 0.05, 0.1, 1.0]);
-        r2d.stroke_rect(field_x, py + 150.0, field_w, 30.0, 1.5, pass_border);
-
-        // Password cursor
-        if pass_active && (game.tick / 30) % 2 == 0 {
-            let cursor_x = field_x + 6.0 + (game.password.len() as f32 * 8.0);
-            r2d.fill_rect(cursor_x, py + 155.0, 2.0, 20.0, [1.0, 1.0, 1.0, 0.8]);
+        r2d.stroke_rect(field_x, py + 150.0, field_w, 30.0, 1.5, pb);
+        if game.active_field == 1 && (game.tick / 30) % 2 == 0 {
+            r2d.fill_rect(field_x + 6.0 + (game.password.len() as f32 * 8.0), py + 155.0, 2.0, 20.0, [1.0, 1.0, 1.0, 0.8]);
         }
-
-        // Password dots (asterisks)
         for i in 0..game.password.len() {
             r2d.fill_rect(field_x + 8.0 + (i as f32 * 8.0), py + 160.0, 5.0, 5.0, [1.0, 1.0, 1.0, 0.9]);
         }
 
         // Login button
-        let btn_w = 120.0;
-        let btn_h = 36.0;
-        let btn_x = px + (panel_w - btn_w) / 2.0;
-        let btn_y = py + 200.0;
-
-        r2d.fill_gradient_v(btn_x, btn_y, btn_w, btn_h,
-            [0.15, 0.4, 0.15, 1.0],
-            [0.08, 0.25, 0.08, 1.0],
-        );
-        r2d.stroke_rect(btn_x, btn_y, btn_w, btn_h, 1.5, [0.3, 0.6, 0.3, 1.0]);
-
-        // "LOGIN" text blocks
-        let login_gold = [0.9, 0.8, 0.3, 1.0];
+        let btn_x = px + (panel_w - 120.0) / 2.0;
+        r2d.fill_gradient_v(btn_x, py + 200.0, 120.0, 36.0, [0.15, 0.4, 0.15, 1.0], [0.08, 0.25, 0.08, 1.0]);
+        r2d.stroke_rect(btn_x, py + 200.0, 120.0, 36.0, 1.5, [0.3, 0.6, 0.3, 1.0]);
         for i in 0..5 {
-            let lx = btn_x + 28.0 + (i as f32 * 14.0);
-            r2d.fill_rect(lx, btn_y + 10.0, 10.0, 16.0, login_gold);
+            r2d.fill_rect(btn_x + 28.0 + (i as f32 * 14.0), py + 210.0, 10.0, 16.0, [0.9, 0.8, 0.3, 1.0]);
         }
 
-        // Status message area
-        let status_color = match &game.status_message {
-            s if s.contains("Error") || s.contains("failed") => [1.0, 0.3, 0.3, 1.0],
-            s if s.contains("Connecting") || s.contains("Loading") => [1.0, 1.0, 0.3, 1.0],
-            s if s.contains("Success") => [0.3, 1.0, 0.3, 1.0],
-            _ => [0.7, 0.7, 0.7, 0.8],
-        };
-
+        // Status
         if !game.status_message.is_empty() {
             let msg_w = game.status_message.len() as f32 * 7.0;
-            let msg_x = px + (panel_w - msg_w) / 2.0;
-            r2d.fill_rect(msg_x, py + 250.0, msg_w, 14.0, status_color);
+            let color = if game.status_message.contains("Error") { [1.0, 0.3, 0.3, 1.0] }
+                else if game.status_message.contains("Connecting") { [1.0, 1.0, 0.3, 1.0] }
+                else { [0.7, 0.7, 0.7, 0.8] };
+            r2d.fill_rect(px + (panel_w - msg_w) / 2.0, py + 250.0, msg_w, 14.0, color);
         }
-
-        // Server info at bottom
-        let info_y = h - 20.0;
-        r2d.fill_rect(5.0, info_y, 200.0, 12.0, [0.4, 0.4, 0.4, 0.5]);
     }
 
     fn draw_loading_screen(&mut self, game: &super::game::Game) {
@@ -272,30 +267,41 @@ impl Renderer {
         let h = self.config.height as f32;
         let r2d = &mut self.renderer_2d;
 
-        // Dark background
         r2d.fill_rect(0.0, 0.0, w, h, [0.02, 0.02, 0.05, 1.0]);
-
-        // Loading bar background
-        let bar_w = 300.0;
-        let bar_h = 30.0;
-        let bx = (w - bar_w) / 2.0;
-        let by = (h - bar_h) / 2.0;
-
-        r2d.fill_rect(bx, by, bar_w, bar_h, [0.1, 0.1, 0.15, 1.0]);
-        r2d.stroke_rect(bx, by, bar_w, bar_h, 2.0, [0.3, 0.3, 0.5, 1.0]);
-
-        // Loading bar fill (animated)
+        let bx = (w - 300.0) / 2.0;
+        let by = (h - 30.0) / 2.0;
+        r2d.fill_rect(bx, by, 300.0, 30.0, [0.1, 0.1, 0.15, 1.0]);
+        r2d.stroke_rect(bx, by, 300.0, 30.0, 2.0, [0.3, 0.3, 0.5, 1.0]);
         let progress = ((game.tick as f32 / 200.0) % 1.0).min(1.0);
-        let fill_w = (bar_w - 4.0) * progress;
-        r2d.fill_gradient_h(bx + 2.0, by + 2.0, fill_w, bar_h - 4.0,
-            [0.2, 0.5, 0.2, 1.0],
-            [0.1, 0.3, 0.1, 1.0],
-        );
+        r2d.fill_gradient_h(bx + 2.0, by + 2.0, 296.0 * progress, 26.0, [0.2, 0.5, 0.2, 1.0], [0.1, 0.3, 0.1, 1.0]);
+    }
 
-        // "Loading..." text blocks
-        let text_y = by - 25.0;
-        for i in 0..10 {
-            r2d.fill_rect((w / 2.0) - 50.0 + (i as f32 * 10.0), text_y, 7.0, 12.0, [0.7, 0.7, 0.7, 0.8]);
+    fn draw_hud(&mut self, game: &super::game::Game) {
+        let w = self.config.width as f32;
+        let r2d = &mut self.renderer_2d;
+
+        // Minimap background (top-right)
+        r2d.fill_rect(w - 160.0, 5.0, 155.0, 155.0, [0.1, 0.1, 0.15, 0.7]);
+        r2d.stroke_rect(w - 160.0, 5.0, 155.0, 155.0, 1.0, [0.4, 0.35, 0.2, 1.0]);
+
+        // Compass dot (center of minimap)
+        r2d.fill_rect(w - 85.0, 80.0, 6.0, 6.0, [1.0, 0.0, 0.0, 1.0]);
+
+        // Chat box (bottom)
+        r2d.fill_rect(0.0, self.config.height as f32 - 140.0, 520.0, 140.0, [0.05, 0.05, 0.1, 0.8]);
+        r2d.stroke_rect(0.0, self.config.height as f32 - 140.0, 520.0, 140.0, 1.0, [0.3, 0.3, 0.5, 0.6]);
+
+        // Inventory panel (right side)
+        r2d.fill_rect(w - 200.0, 170.0, 195.0, 260.0, [0.08, 0.08, 0.12, 0.8]);
+        r2d.stroke_rect(w - 200.0, 170.0, 195.0, 260.0, 1.0, [0.4, 0.35, 0.2, 0.6]);
+
+        // Tab buttons along inventory top
+        for i in 0..7 {
+            let tx = w - 195.0 + (i as f32 * 27.0);
+            r2d.fill_rect(tx, 172.0, 25.0, 18.0, [0.15, 0.13, 0.1, 0.9]);
         }
+
+        // Info text area
+        r2d.fill_rect(5.0, 5.0, 200.0, 16.0, [0.3, 0.3, 0.3, 0.4]);
     }
 }
