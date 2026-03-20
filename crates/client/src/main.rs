@@ -1,23 +1,22 @@
 //! 2009Scape Rust Client
 //!
 //! A modern Rust/WASM rewrite of the RuneScape RT4 client.
-//! Supports both native desktop and browser (PWA) via WebAssembly.
 
 pub mod cache;
 pub mod game;
 pub mod net;
 pub mod render;
 
-use game::{Game, GameState};
+use game::Game;
 use render::Renderer;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId, WindowAttributes};
+use winit::keyboard::{Key, NamedKey};
 use log::info;
 use std::sync::Arc;
 
-/// Main application state.
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
@@ -47,14 +46,11 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("Failed to create window"));
         self.window = Some(window.clone());
 
-        // Initialize renderer
         let window_ref: &'static Window = unsafe {
-            // SAFETY: Window lives as long as the app (stored in Arc)
             &*(Arc::as_ptr(&window))
         };
 
-        let renderer = pollster::block_on(Renderer::new(window_ref));
-        match renderer {
+        match pollster::block_on(Renderer::new(window_ref)) {
             Ok(r) => {
                 info!("Renderer initialized successfully");
                 self.renderer = Some(r);
@@ -80,26 +76,31 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                // Phase 2: Handle keyboard input for login screen
-                if event.state.is_pressed() {
-                    if let winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) = event.logical_key {
-                        event_loop.exit();
+                if !event.state.is_pressed() { return; }
+
+                match &event.logical_key {
+                    Key::Named(NamedKey::Escape) => event_loop.exit(),
+                    Key::Named(NamedKey::Tab) => self.game.on_tab(),
+                    Key::Named(NamedKey::Enter) => self.game.on_enter(),
+                    Key::Named(NamedKey::Backspace) => self.game.on_backspace(),
+                    Key::Character(c) => {
+                        for ch in c.chars() {
+                            self.game.on_char(ch);
+                        }
                     }
+                    _ => {}
                 }
             }
 
             WindowEvent::RedrawRequested => {
-                // Game tick
                 self.game.tick();
 
-                // Render frame
                 if let Some(renderer) = &mut self.renderer {
-                    if let Err(e) = renderer.render(&self.game.state) {
+                    if let Err(e) = renderer.render(&self.game) {
                         log::error!("Render error: {}", e);
                     }
                 }
 
-                // Request next frame
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
