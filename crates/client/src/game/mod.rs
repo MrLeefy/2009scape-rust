@@ -225,17 +225,17 @@ impl Game {
     /// Process queued server packet updates into game state.
     fn process_packet_updates(&mut self) {
         // Stats
-        for (skill_id, level, xp) in self.packets.stat_updates.drain(..) {
+        for (skill_id, level, xp) in self.packets.drain_stats() {
             if let Some(skill) = self.skills.get_mut(skill_id as usize) {
                 skill.level = level;
-                skill.xp = xp;
+                skill.xp = xp as u32;
             }
         }
 
-        // Chat
-        for (sender, text) in self.packets.chat_updates.drain(..) {
+        // Chat (server messages)
+        for text in self.packets.drain_messages() {
             self.chat_messages.push(ChatMessage {
-                sender,
+                sender: "Server".to_string(),
                 text,
                 color: [0.0, 0.8, 0.8, 1.0],
                 timestamp: self.tick,
@@ -243,14 +243,14 @@ impl Game {
         }
 
         // Inventory
-        for (slot, item_id, quantity) in self.packets.inv_updates.drain(..) {
+        for (slot, item_id, quantity) in self.packets.drain_inv_updates() {
             let slot = slot as usize;
             if slot < self.inventory.len() {
                 if item_id > 0 {
                     self.inventory[slot] = Some(Item {
-                        id: item_id,
+                        id: item_id as i32,
                         name: format!("Item {}", item_id),
-                        quantity,
+                        quantity: quantity as u32,
                         color: [0.5, 0.5, 0.5, 1.0],
                     });
                 } else {
@@ -260,7 +260,7 @@ impl Game {
         }
 
         // Sound effects from server
-        for (sound_id, _volume, _delay) in self.packets.sound_updates.drain(..) {
+        for sound_id in self.packets.drain_sounds() {
             // Map server sound IDs to our SFX enum (simplified)
             let sfx = match sound_id {
                 2727 => SoundEffect::MeleeHit,
