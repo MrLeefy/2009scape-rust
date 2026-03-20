@@ -83,12 +83,12 @@ impl ObjType {
                 5 => { obj.x_angle_2d = buf.g2()?; }
                 6 => { obj.y_angle_2d = buf.g2()?; }
                 7 => {
-                    let v = buf.g2()? as i16;
-                    obj.x_offset_2d = if v > 32767 { v - 65536i16 } else { v };
+                    let v = buf.g2()? as i32;
+                    obj.x_offset_2d = if v > 32767 { (v - 65536) as i16 } else { v as i16 };
                 }
                 8 => {
-                    let v = buf.g2()? as i16;
-                    obj.y_offset_2d = if v > 32767 { v - 65536i16 } else { v };
+                    let v = buf.g2()? as i32;
+                    obj.y_offset_2d = if v > 32767 { (v - 65536) as i16 } else { v as i16 };
                 }
                 11 => { obj.stackable = true; }
                 12 => { obj.cost = buf.g4()?; }

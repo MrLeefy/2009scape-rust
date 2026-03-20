@@ -12,6 +12,8 @@
 //! - Type 1: BZIP2
 //! - Type 2: GZIP
 
+pub mod loader;
+
 use rs2_common::buffer::Buffer;
 use std::collections::HashMap;
 use std::fs;
