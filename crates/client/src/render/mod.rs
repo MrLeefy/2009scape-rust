@@ -104,6 +104,20 @@ impl Renderer {
         }
     }
 
+    /// Toggle between SD and HD rendering modes.
+    pub fn toggle_quality(&mut self) {
+        self.quality = match self.quality {
+            RenderQuality::Standard => RenderQuality::HighDetail,
+            RenderQuality::HighDetail => RenderQuality::Standard,
+        };
+        let mode = match self.quality {
+            RenderQuality::Standard => renderer3d::RenderModeUniform::sd(),
+            RenderQuality::HighDetail => renderer3d::RenderModeUniform::hd(),
+        };
+        self.renderer_3d.update_render_mode(&self.queue, &mode);
+        log::info!("Render quality: {:?}", self.quality);
+    }
+
     pub fn render(&mut self, game: &super::game::Game) -> Result<()> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());

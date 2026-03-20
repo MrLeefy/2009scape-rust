@@ -33,10 +33,47 @@ struct CameraUniform {
     _padding: f32,
 }
 
+/// Render mode uniform — controls SD/HD visual differences.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RenderModeUniform {
+    pub fog_distance: f32,
+    pub fog_density: f32,
+    pub ambient_strength: f32,
+    pub specular_power: f32,
+    pub fog_color: [f32; 3],
+    pub hd_mode: f32,
+}
+
+impl RenderModeUniform {
+    pub fn sd() -> Self {
+        RenderModeUniform {
+            fog_distance: 1600.0,
+            fog_density: 1.0,
+            ambient_strength: 0.5,
+            specular_power: 0.0,
+            fog_color: [0.05, 0.08, 0.15],
+            hd_mode: 0.0,
+        }
+    }
+
+    pub fn hd() -> Self {
+        RenderModeUniform {
+            fog_distance: 6400.0,
+            fog_density: 0.5,
+            ambient_strength: 0.35,
+            specular_power: 32.0,
+            fog_color: [0.05, 0.08, 0.15],
+            hd_mode: 1.0,
+        }
+    }
+}
+
 /// 3D world renderer.
 pub struct Renderer3D {
     pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
+    render_mode_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     terrain_vertex_buffer: wgpu::Buffer,
     terrain_index_buffer: wgpu::Buffer,
@@ -53,16 +90,28 @@ impl Renderer3D {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("3D BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -120,13 +169,26 @@ impl Renderer3D {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let render_mode = RenderModeUniform::sd();
+        let render_mode_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("RenderMode Buffer"),
+            contents: bytemuck::cast_slice(&[render_mode]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Camera BG"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: render_mode_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // Generate terrain
@@ -150,6 +212,7 @@ impl Renderer3D {
         Renderer3D {
             pipeline,
             camera_buffer,
+            render_mode_buffer,
             camera_bind_group,
             terrain_vertex_buffer,
             terrain_index_buffer,
@@ -173,6 +236,11 @@ impl Renderer3D {
     /// Resize depth texture.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.depth_texture = create_depth_texture(device, width, height);
+    }
+
+    /// Update render mode (SD/HD toggle).
+    pub fn update_render_mode(&self, queue: &wgpu::Queue, mode: &RenderModeUniform) {
+        queue.write_buffer(&self.render_mode_buffer, 0, bytemuck::cast_slice(&[*mode]));
     }
 
     /// Render the 3D world.
